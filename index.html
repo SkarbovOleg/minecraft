@@ -2,58 +2,74 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<title>Web Minecraft</title>
+<title>Web Minecraft 3D</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { overflow: hidden; font-family: monospace; background: #000; }
   canvas { display: block; }
   #crosshair {
-    position: fixed; top: 50%; left: 50%; width: 20px; height: 20px;
+    position: fixed; top: 50%; left: 50%; width: 22px; height: 22px;
     transform: translate(-50%, -50%); pointer-events: none; z-index: 10;
   }
   #crosshair::before, #crosshair::after {
-    content: ''; position: absolute; background: white;
+    content: ''; position: absolute; background: rgba(255,255,255,0.9);
+    box-shadow: 0 0 2px black;
   }
   #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
   #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
   #info {
     position: fixed; top: 10px; left: 10px; color: white; font-size: 13px;
-    background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px;
-    pointer-events: none; z-index: 10; line-height: 1.5;
+    background: rgba(0,0,0,0.55); padding: 10px 14px; border-radius: 6px;
+    pointer-events: none; z-index: 10; line-height: 1.6;
   }
   #startScreen {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100;
+    position: fixed; inset: 0; background: linear-gradient(180deg, #1e3a5f, #0f172a); z-index: 100;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: white; cursor: pointer;
+    color: white; cursor: pointer; font-family: sans-serif;
   }
-  #startScreen h1 { font-size: 48px; margin-bottom: 20px; color: #4ade80; }
-  #startScreen p { font-size: 16px; margin: 5px; opacity: 0.8; }
+  #startScreen h1 { font-size: 56px; margin-bottom: 24px; color: #4ade80; text-shadow: 0 4px 12px rgba(0,0,0,0.5); letter-spacing: 4px; }
+  #startScreen p { font-size: 16px; margin: 6px; opacity: 0.85; }
   #health {
-    position: fixed; bottom: 20px; left: 20px; color: #f87171; font-size: 20px;
-    z-index: 10; pointer-events: none;
+    position: fixed; bottom: 20px; left: 20px; font-size: 22px;
+    z-index: 10; pointer-events: none; text-shadow: 0 2px 4px black;
   }
-  #enemyHealth {
+  #targetInfo {
     position: fixed; top: 10px; right: 10px; color: #f87171; font-size: 16px;
-    background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 5px;
+    background: rgba(0,0,0,0.55); padding: 8px 14px; border-radius: 6px;
     z-index: 10; pointer-events: none;
   }
+  #hotbar {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 10; pointer-events: none;
+  }
+  .slot {
+    width: 50px; height: 50px; border: 2px solid rgba(255,255,255,0.4);
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    font-size: 24px; background: rgba(0,0,0,0.4); transition: all 0.15s;
+  }
+  .slot.active { border-color: #4ade80; box-shadow: 0 0 12px #4ade80; transform: scale(1.1); }
 </style>
 </head>
 <body>
 
 <div id="crosshair"></div>
 <div id="info">
-  <b>WASD</b> — движение &nbsp;|&nbsp; <b>Пробел</b> — прыжок<br>
-  <b>ЛКМ</b> — копать / атаковать &nbsp;|&nbsp; <b>ПКМ</b> — ставить блок<br>
-  <b>1/2/3</b> — выбрать блок (трава/камень/дерево) &nbsp;|&nbsp; <b>ESC</b> — пауза
+  <b>WASD</b> движение · <b>Пробел</b> прыжок · <b>Shift</b> бег<br>
+  <b>ЛКМ</b> копать / атаковать · <b>ПКМ</b> ставить блок<br>
+  <b>1-4</b> выбор блока · <b>ESC</b> пауза
 </div>
 <div id="health">❤ ❤ ❤</div>
-<div id="enemyHealth">Враг: 3 HP</div>
+<div id="targetInfo">Прицельтесь в моба</div>
+<div id="hotbar">
+  <div class="slot active" data-type="grass">🟩</div>
+  <div class="slot" data-type="stone">⬜</div>
+  <div class="slot" data-type="wood">🟫</div>
+  <div class="slot" data-type="dirt">🟤</div>
+</div>
 
 <div id="startScreen">
-  <h1>WEB MINECRAFT</h1>
+  <h1>WEB MINECRAFT 3D</h1>
   <p>Нажмите, чтобы начать</p>
-  <p style="margin-top:20px; font-size:12px;">Управление мышью будет захвачено</p>
 </div>
 
 <script type="importmap">
@@ -67,33 +83,35 @@
 <script type="module">
 import * as THREE from 'three';
 
-// ============ НАСТРОЙКА СЦЕНЫ ============
+// ============ СЦЕНА ============
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb);
-scene.fog = new THREE.Fog(0x87ceeb, 30, 80);
+scene.background = new THREE.Color(0x9dd0ff);
+scene.fog = new THREE.Fog(0x9dd0ff, 40, 110);
 
-const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 300);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
-// Освещение
-const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-sun.position.set(50, 80, 30);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x445533, 0.7);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xfff5e0, 1.3);
+sun.position.set(60, 100, 40);
 sun.castShadow = true;
-sun.shadow.camera.left = -60;
-sun.shadow.camera.right = 60;
-sun.shadow.camera.top = 60;
-sun.shadow.camera.bottom = -60;
+sun.shadow.camera.left = -80;
+sun.shadow.camera.right = 80;
+sun.shadow.camera.top = 80;
+sun.shadow.camera.bottom = -80;
+sun.shadow.camera.far = 250;
 sun.shadow.mapSize.set(2048, 2048);
 scene.add(sun);
-scene.add(new THREE.AmbientLight(0xffffff, 0.45));
 
-// ============ ШУМ ПЕРЛИНА (встроенный) ============
-// Упрощённый 2D simplex-подобный шум
+// ============ ШУМ ============
 const perm = new Uint8Array(512);
 const p = new Uint8Array(256);
 for (let i = 0; i < 256; i++) p[i] = i;
@@ -103,13 +121,13 @@ for (let i = 255; i > 0; i--) {
 }
 for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
 
-function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
-function lerp(a, b, t) { return a + t * (b - a); }
-function grad(hash, x, y) {
-  const h = hash & 7;
-  const u = h < 4 ? x : y;
-  const v = h < 4 ? y : x;
-  return ((h & 1) ? -u : u) + ((h & 2) ? -2 * v : 2 * v);
+const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+const lerp = (a, b, t) => a + t * (b - a);
+function grad(h, x, y) {
+  const v = (h & 7);
+  const u = v < 4 ? x : y;
+  const w = v < 4 ? y : x;
+  return ((v & 1) ? -u : u) + ((v & 2) ? -2 * w : 2 * w);
 }
 function noise2D(x, y) {
   const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
@@ -131,145 +149,110 @@ function fbm(x, y) {
   return v;
 }
 
-// ============ МАТЕРИАЛЫ БЛОКОВ ============
+// ============ БЛОКИ ============
 const blockTypes = {
-  grass:  { color: 0x4ade80, name: 'Трава' },
-  dirt:   { color: 0x8b5a3c, name: 'Земля' },
-  stone:  { color: 0x808080, name: 'Камень' },
-  wood:   { color: 0x8b4513, name: 'Дерево' },
-  leaf:   { color: 0x228b22, name: 'Листва' },
+  grass: { color: 0x4ade80 },
+  dirt:  { color: 0x8b5a3c },
+  stone: { color: 0x808080 },
+  wood:  { color: 0x8b4513 },
+  leaf:  { color: 0x228b22 },
 };
 const materials = {};
-for (const k in blockTypes) {
-  materials[k] = new THREE.MeshLambertMaterial({ color: blockTypes[k].color });
-}
+for (const k in blockTypes) materials[k] = new THREE.MeshLambertMaterial({ color: blockTypes[k].color });
 
-// ============ ХРАНИЛИЩЕ БЛОКОВ ============
-const worldSize = 40;     // размер мира по X и Z
-const maxHeight = 20;
-const blocks = new Map();  // "x,y,z" -> { mesh, type }
-const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
+const worldSize = 40;
+const blocks = new Map();
+const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+const key = (x, y, z) => `${x},${y},${z}`;
 
-function key(x, y, z) { return `${x},${y},${z}`; }
-
-function addBlock(x, y, z, type, skipStore = false) {
+function addBlock(x, y, z, type) {
   const k = key(x, y, z);
-  if (blocks.has(k)) return null;
-  const mesh = new THREE.Mesh(blockGeometry, materials[type]);
-  mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.userData = { x, y, z, type };
-  scene.add(mesh);
-  if (!skipStore) blocks.set(k, { mesh, type });
-  return mesh;
+  if (blocks.has(k)) return;
+  const m = new THREE.Mesh(blockGeo, materials[type]);
+  m.position.set(x + 0.5, y + 0.5, z + 0.5);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  m.userData = { x, y, z, type };
+  scene.add(m);
+  blocks.set(k, { mesh: m, type });
 }
 
 function removeBlock(x, y, z) {
   const k = key(x, y, z);
   const b = blocks.get(k);
-  if (b) {
-    scene.remove(b.mesh);
-    blocks.delete(k);
-  }
+  if (b) { scene.remove(b.mesh); blocks.delete(k); }
 }
 
-// ============ ГЕНЕРАЦИЯ МИРА ============
+// ============ ГЕНЕРАЦИЯ ============
 function generateWorld() {
   const trees = [];
-  const heights = new Map();
-  
   for (let x = 0; x < worldSize; x++) {
     for (let z = 0; z < worldSize; z++) {
       const n = fbm(x * 0.08, z * 0.08);
       const height = Math.max(2, Math.floor(n * 5 + 6));
-      heights.set(key(x, 0, z), height);
-      
       for (let y = 0; y < height; y++) {
-        let type = 'stone';
-        if (y === height - 1) type = 'grass';
-        else if (y >= height - 3) type = 'dirt';
-        addBlock(x, y, z, type);
+        let t = 'stone';
+        if (y === height - 1) t = 'grass';
+        else if (y >= height - 3) t = 'dirt';
+        addBlock(x, y, z, t);
       }
-      
-      if (Math.random() < 0.03 && height > 4 && height < 12) {
-        trees.push({ x, y: height, z });
-      }
+      if (Math.random() < 0.03 && height > 4 && height < 12) trees.push({ x, y: height, z });
     }
   }
-  
-  // Деревья
   for (const t of trees) {
-    const trunkHeight = 3 + Math.floor(Math.random() * 2);
-    for (let i = 0; i < trunkHeight; i++) {
-      addBlock(t.x, t.y + i, t.z, 'wood');
-    }
-    const topY = t.y + trunkHeight;
-    // Листва — крест + верхушка
+    const th = 3 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < th; i++) addBlock(t.x, t.y + i, t.z, 'wood');
+    const top = t.y + th;
     const leaves = [
-      [0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
-      [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
-      [0, 1, 0], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
-      [0, 2, 0],
+      [0,0,0],[1,0,0],[-1,0,0],[0,0,1],[0,0,-1],
+      [1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+      [0,1,0],[1,1,0],[-1,1,0],[0,1,1],[0,1,-1],[0,2,0],
     ];
-    for (const [dx, dy, dz] of leaves) {
-      addBlock(t.x + dx, topY + dy, t.z + dz, 'leaf');
-    }
+    for (const [dx, dy, dz] of leaves) addBlock(t.x + dx, top + dy, t.z + dz, 'leaf');
   }
 }
-
 generateWorld();
 
-// ============ ИГРОК (камера + физика) ============
+// ============ ИГРОК ============
 const player = {
-  pos: new THREE.Vector3(worldSize / 2, 15, worldSize / 2),
+  pos: new THREE.Vector3(worldSize / 2, 16, worldSize / 2),
   vel: new THREE.Vector3(),
-  yaw: 0,
-  pitch: 0,
-  onGround: false,
-  health: 3,
+  yaw: 0, pitch: 0, onGround: false, health: 3,
 };
-const playerHeight = 1.7;
-const playerRadius = 0.3;
-const gravity = 25;
-const jumpSpeed = 8;
-const moveSpeed = 5;
+const PH = 1.7, PR = 0.3;
 
 // ============ УПРАВЛЕНИЕ ============
 const keys = {};
-addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (e.code === 'Digit1') currentBlock = 'grass';
-  if (e.code === 'Digit2') currentBlock = 'stone';
-  if (e.code === 'Digit3') currentBlock = 'wood';
-  if (e.code === 'Digit4') currentBlock = 'dirt';
-});
-addEventListener('keyup', e => keys[e.code] = false);
-
 let currentBlock = 'grass';
 let started = false;
+
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  const map = { Digit1: 'grass', Digit2: 'stone', Digit3: 'wood', Digit4: 'dirt' };
+  if (map[e.code]) {
+    currentBlock = map[e.code];
+    document.querySelectorAll('.slot').forEach((s, i) => {
+      s.classList.toggle('active', s.dataset.type === currentBlock);
+    });
+  }
+});
+addEventListener('keyup', e => keys[e.code] = false);
 
 document.getElementById('startScreen').addEventListener('click', () => {
   document.getElementById('startScreen').style.display = 'none';
   renderer.domElement.requestPointerLock();
   started = true;
 });
-
 renderer.domElement.addEventListener('click', () => {
-  if (started && document.pointerLockElement !== renderer.domElement) {
+  if (started && document.pointerLockElement !== renderer.domElement)
     renderer.domElement.requestPointerLock();
-  }
 });
-
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement !== renderer.domElement && started) {
     document.getElementById('startScreen').style.display = 'flex';
-    document.getElementById('startScreen').querySelector('h1').textContent = 'ПАУЗА';
-    document.getElementById('startScreen').querySelector('p').textContent = 'Нажмите, чтобы продолжить';
     started = false;
   }
 });
-
 addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
   player.yaw -= e.movementX * 0.002;
@@ -277,128 +260,56 @@ addEventListener('mousemove', e => {
   player.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, player.pitch));
 });
 
-// ============ RAYCASTER ДЛЯ ВЗАИМОДЕЙСТВИЯ ============
+// ============ RAYCASTER ============
 const raycaster = new THREE.Raycaster();
 raycaster.far = 6;
+const allMobs = [];  // массив всех мобов
 
 addEventListener('mousedown', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
-  
-  // Луч из центра экрана
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-  
-  // Сначала проверяем врага
-  const enemyHit = raycaster.intersectObject(enemy.mesh);
-  if (enemyHit.length > 0) {
-    enemy.health--;
-    document.getElementById('enemyHealth').textContent = `Враг: ${enemy.health} HP`;
-    enemy.mesh.material.color.setHex(0xffffff);
-    setTimeout(() => { if (enemy.mesh.parent) enemy.mesh.material.color.setHex(0xcc2222); }, 100);
-    if (enemy.health <= 0) {
-      enemy.respawn();
+
+  // Мобы первыми
+  const mobMeshes = allMobs.filter(m => m.alive).map(m => m.mesh);
+  const mobHits = raycaster.intersectObjects(mobMeshes, true);
+  if (mobHits.length > 0) {
+    // Найти моба по верхнему объекту
+    let obj = mobHits[0].object;
+    while (obj && !obj.userData.mob) obj = obj.parent;
+    if (obj && obj.userData.mob) {
+      obj.userData.mob.hit(1);
+      return;
     }
-    return;
   }
-  
-  // Затем блоки
-  const allMeshes = [];
-  blocks.forEach(b => allMeshes.push(b.mesh));
-  const hits = raycaster.intersectObjects(allMeshes);
-  
-  if (hits.length > 0) {
-    const hit = hits[0];
-    const d = hit.object.userData;
-    
-    if (e.button === 0) {
-      // ЛКМ — удалить
-      removeBlock(d.x, d.y, d.z);
-    } else if (e.button === 2) {
-      // ПКМ — поставить
-      const normal = hit.face.normal.clone();
-      const nx = d.x + normal.x, ny = d.y + normal.y, nz = d.z + normal.z;
-      // Не ставить внутрь игрока
-      const dx = nx + 0.5 - player.pos.x;
-      const dz = nz + 0.5 - player.pos.z;
-      const dy = ny + 0.5 - (player.pos.y - playerHeight / 2);
-      if (Math.abs(dx) < 0.9 && Math.abs(dz) < 0.9 && Math.abs(dy) < 1.2) return;
-      addBlock(nx, ny, nz, currentBlock);
-    }
+
+  // Блоки
+  const meshes = [];
+  blocks.forEach(b => meshes.push(b.mesh));
+  const hits = raycaster.intersectObjects(meshes);
+  if (hits.length === 0) return;
+  const hit = hits[0];
+  const d = hit.object.userData;
+
+  if (e.button === 0) {
+    removeBlock(d.x, d.y, d.z);
+  } else if (e.button === 2) {
+    const n = hit.face.normal;
+    const nx = d.x + n.x, ny = d.y + n.y, nz = d.z + n.z;
+    const dx = nx + 0.5 - player.pos.x;
+    const dz = nz + 0.5 - player.pos.z;
+    const dy = ny + 0.5 - (player.pos.y - PH / 2);
+    if (Math.abs(dx) < 0.9 && Math.abs(dz) < 0.9 && Math.abs(dy) < 1.2) return;
+    addBlock(nx, ny, nz, currentBlock);
   }
 });
-
 addEventListener('contextmenu', e => e.preventDefault());
 
-// ============ МОБ (ВРАГ) ============
-class Enemy {
-  constructor() {
-    this.health = 3;
-    const geom = new THREE.BoxGeometry(1, 2, 1);
-    const mat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
-    this.mesh = new THREE.Mesh(geom, mat);
-    this.mesh.castShadow = true;
-    this.mesh.position.set(worldSize / 2 + 8, 12, worldSize / 2 + 8);
-    scene.add(this.mesh);
-    this.speed = 2.5;
-    this.damageCooldown = 0;
-  }
-  
-  respawn() {
-    this.health = 3;
-    document.getElementById('enemyHealth').textContent = 'Враг: 3 HP';
-    this.mesh.position.set(
-      player.pos.x + (Math.random() - 0.5) * 20,
-      15,
-      player.pos.z + (Math.random() - 0.5) * 20
-    );
-  }
-  
-  update(dt) {
-    const dx = player.pos.x - this.mesh.position.x;
-    const dz = player.pos.z - this.mesh.position.z;
-    const dy = player.pos.y - this.mesh.position.y;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-    
-    if (dist < 20 && dist > 0.1) {
-      // Идёт к игроку
-      this.mesh.position.x += (dx / dist) * this.speed * dt;
-      this.mesh.position.z += (dz / dist) * this.speed * dt;
-    }
-    
-    // Гравитация моба
-    this.mesh.position.y += dy * 0.5 * dt;
-    
-    // Урон
-    this.damageCooldown -= dt;
-    const dist3d = this.mesh.position.distanceTo(player.pos);
-    if (dist3d < 1.8 && this.damageCooldown <= 0) {
-      player.health--;
-      this.damageCooldown = 1;
-      document.getElementById('health').textContent = '❤ '.repeat(Math.max(0, player.health)) + '💀'.repeat(Math.max(0, 3 - player.health));
-      if (player.health <= 0) {
-        player.health = 3;
-        player.pos.set(worldSize / 2, 15, worldSize / 2);
-        player.vel.set(0, 0, 0);
-        document.getElementById('health').textContent = '❤ ❤ ❤';
-      }
-    }
-  }
-}
-const enemy = new Enemy();
-
 // ============ КОЛЛИЗИИ ============
-function isSolid(x, y, z) {
-  return blocks.has(key(x, y, z));
-}
-
-function checkCollision(pos) {
-  // Проверяем AABB игрока
-  const minX = Math.floor(pos.x - playerRadius);
-  const maxX = Math.floor(pos.x + playerRadius);
-  const minY = Math.floor(pos.y - playerHeight);
-  const maxY = Math.floor(pos.y);
-  const minZ = Math.floor(pos.z - playerRadius);
-  const maxZ = Math.floor(pos.z + playerRadius);
-  
+const isSolid = (x, y, z) => blocks.has(key(x, y, z));
+function collides(pos, radius = PR, height = PH) {
+  const minX = Math.floor(pos.x - radius), maxX = Math.floor(pos.x + radius);
+  const minY = Math.floor(pos.y - height), maxY = Math.floor(pos.y);
+  const minZ = Math.floor(pos.z - radius), maxZ = Math.floor(pos.z + radius);
   for (let x = minX; x <= maxX; x++)
     for (let y = minY; y <= maxY; y++)
       for (let z = minZ; z <= maxZ; z++)
@@ -406,71 +317,271 @@ function checkCollision(pos) {
   return false;
 }
 
-// ============ ОБНОВЛЕНИЕ ИГРОКА ============
+// Найти поверхность земли в точке
+function groundHeight(x, z) {
+  for (let y = 30; y >= 0; y--) {
+    if (isSolid(Math.floor(x), y, Math.floor(z))) return y + 1;
+  }
+  return 0;
+}
+
+// ============ МОБЫ ============
+class Mob {
+  constructor(type, position) {
+    this.type = type;
+    this.alive = true;
+    this.health = type === 'cow' ? 4 : type === 'pig' ? 3 : 3;
+    this.maxHealth = this.health;
+    this.speed = type === 'zombie' ? 2.5 : 1.2;
+    this.aggro = type === 'zombie';
+    this.hitCooldown = 0;
+    this.wanderTimer = 0;
+    this.wanderDir = new THREE.Vector3();
+    this.homeY = position.y;
+    this.mesh = this.buildMesh(type);
+    this.mesh.userData.mob = this;
+    this.mesh.traverse(o => { o.userData.mob = this; });
+    this.mesh.position.copy(position);
+    scene.add(this.mesh);
+    allMobs.push(this);
+  }
+
+  buildMesh(type) {
+    const g = new THREE.Group();
+    let bodyColor, headColor, bodySize, headSize;
+    if (type === 'cow') {
+      bodyColor = 0x8b5a3c; headColor = 0x654321;
+      bodySize = [0.9, 0.7, 1.3]; headSize = [0.5, 0.5, 0.5];
+    } else if (type === 'pig') {
+      bodyColor = 0xf5a3a3; headColor = 0xe88a8a;
+      bodySize = [0.7, 0.6, 1.0]; headSize = [0.5, 0.45, 0.45];
+    } else {
+      bodyColor = 0x3a7a3a; headColor = 0x2d5f2d;
+      bodySize = [0.55, 0.9, 0.3]; headSize = [0.5, 0.5, 0.5];
+    }
+    const bodyMat = new THREE.MeshLambertMaterial({ color: bodyColor });
+    const headMat = new THREE.MeshLambertMaterial({ color: headColor });
+    const legMat = new THREE.MeshLambertMaterial({ color: headColor });
+
+    // Тело
+    const body = new THREE.Mesh(new THREE.BoxGeometry(...bodySize), bodyMat);
+    body.position.y = bodySize[1] / 2;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    g.add(body);
+
+    // Голова
+    const head = new THREE.Mesh(new THREE.BoxGeometry(...headSize), headMat);
+    head.position.set(0, bodySize[1] * 0.9, bodySize[2] / 2 + headSize[2] / 2 - 0.05);
+    head.castShadow = true;
+    g.add(head);
+
+    // Глаза (две чёрные точки)
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+    const eyeGeo = new THREE.BoxGeometry(0.08, 0.08, 0.05);
+    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeL.position.set(-headSize[0] * 0.25, headSize[1] * 0.15, headSize[2] / 2 + 0.01);
+    eyeR.position.set( headSize[0] * 0.25, headSize[1] * 0.15, headSize[2] / 2 + 0.01);
+    head.add(eyeL, eyeR);
+
+    // Рога/уши для коровы/свиньи
+    if (type === 'cow') {
+      const hornMat = new THREE.MeshLambertMaterial({ color: 0xf0e0c0 });
+      const hornGeo = new THREE.BoxGeometry(0.08, 0.2, 0.08);
+      const hornL = new THREE.Mesh(hornGeo, hornMat);
+      const hornR = new THREE.Mesh(hornGeo, hornMat);
+      hornL.position.set(-headSize[0] * 0.4, headSize[1] * 0.55, 0);
+      hornR.position.set( headSize[0] * 0.4, headSize[1] * 0.55, 0);
+      head.add(hornL, hornR);
+    }
+
+    // Ноги
+    const legGeo = new THREE.BoxGeometry(0.18, 0.5, 0.18);
+    const legY = -0.25 - bodySize[1] / 2 + 0.1;
+    const offX = bodySize[0] / 2 - 0.1;
+    const offZ = bodySize[2] / 2 - 0.15;
+    for (const [lx, lz] of [[-offX, -offZ], [offX, -offZ], [-offX, offZ], [offX, offZ]]) {
+      const leg = new THREE.Mesh(legGeo, legMat);
+      leg.position.set(lx, legY, lz);
+      leg.castShadow = true;
+      g.add(leg);
+    }
+
+    return g;
+  }
+
+  hit(dmg) {
+    if (!this.alive) return;
+    this.health -= dmg;
+    // Мигание
+    this.mesh.traverse(o => {
+      if (o.material && o.material.color) {
+        if (!o.userData._origColor) o.userData._origColor = o.material.color.getHex();
+        o.material.color.setHex(0xffffff);
+      }
+    });
+    setTimeout(() => {
+      if (!this.alive) return;
+      this.mesh.traverse(o => {
+        if (o.material && o.material.color && o.userData._origColor !== undefined)
+          o.material.color.setHex(o.userData._origColor);
+      });
+    }, 120);
+    if (this.health <= 0) this.die();
+  }
+
+  die() {
+    this.alive = false;
+    scene.remove(this.mesh);
+    // Респавн через 5 сек
+    setTimeout(() => {
+      this.health = this.maxHealth;
+      this.alive = true;
+      this.mesh.position.set(
+        worldSize / 2 + (Math.random() - 0.5) * 20,
+        15,
+        worldSize / 2 + (Math.random() - 0.5) * 20
+      );
+      this.mesh.position.y = groundHeight(this.mesh.position.x, this.mesh.position.z) + 1;
+      scene.add(this.mesh);
+    }, 5000);
+  }
+
+  update(dt, playerPos) {
+    if (!this.alive) return;
+    const pos = this.mesh.position;
+    const dx = playerPos.x - pos.x;
+    const dz = playerPos.z - pos.z;
+    const dist2D = Math.sqrt(dx * dx + dz * dz);
+
+    if (this.aggro) {
+      // Зомби: всегда идёт к игроку
+      if (dist2D > 0.3 && dist2D < 20) {
+        pos.x += (dx / dist2D) * this.speed * dt;
+        pos.z += (dz / dist2D) * this.speed * dt;
+        this.mesh.rotation.y = Math.atan2(dx, dz);
+      }
+      // Урон
+      this.hitCooldown -= dt;
+      const d3 = pos.distanceTo(playerPos);
+      if (d3 < 1.6 && this.hitCooldown <= 0) {
+        this.hitCooldown = 1;
+        player.health--;
+        document.getElementById('health').textContent =
+          '❤ '.repeat(Math.max(0, player.health)) + '💀'.repeat(Math.max(0, 3 - player.health));
+        if (player.health <= 0) {
+          player.health = 3;
+          player.pos.set(worldSize / 2, 16, worldSize / 2);
+          player.vel.set(0, 0, 0);
+          document.getElementById('health').textContent = '❤ ❤ ❤';
+        }
+      }
+    } else {
+      // Мирные: бродят
+      this.wanderTimer -= dt;
+      if (this.wanderTimer <= 0) {
+        this.wanderTimer = 2 + Math.random() * 3;
+        if (Math.random() < 0.3) {
+          this.wanderDir.set(0, 0, 0); // пауза
+        } else {
+          const a = Math.random() * Math.PI * 2;
+          this.wanderDir.set(Math.cos(a), 0, Math.sin(a));
+          this.mesh.rotation.y = Math.atan2(this.wanderDir.x, this.wanderDir.z);
+        }
+      }
+      if (this.wanderDir.lengthSq() > 0) {
+        pos.x += this.wanderDir.x * this.speed * dt;
+        pos.z += this.wanderDir.z * this.speed * dt;
+      }
+      // Убегание если близко
+      if (dist2D < 3 && dist2D > 0.1) {
+        pos.x -= (dx / dist2D) * this.speed * 1.5 * dt;
+        pos.z -= (dz / dist2D) * this.speed * 1.5 * dt;
+        this.mesh.rotation.y = Math.atan2(-dx, -dz);
+      }
+    }
+
+    // Ограничение мира
+    pos.x = Math.max(1, Math.min(worldSize - 1, pos.x));
+    pos.z = Math.max(1, Math.min(worldSize - 1, pos.z));
+
+    // Привязка к земле
+    const gh = groundHeight(pos.x, pos.z);
+    pos.y += (gh - pos.y) * Math.min(1, dt * 10);
+  }
+}
+
+// Создаём мобов
+const mobs = [
+  new Mob('cow',  new THREE.Vector3(worldSize/2 + 5, 12, worldSize/2 + 5)),
+  new Mob('cow',  new THREE.Vector3(worldSize/2 - 6, 12, worldSize/2 + 3)),
+  new Mob('pig',  new THREE.Vector3(worldSize/2 + 3, 12, worldSize/2 - 6)),
+  new Mob('pig',  new THREE.Vector3(worldSize/2 - 4, 12, worldSize/2 - 5)),
+  new Mob('zombie', new THREE.Vector3(worldSize/2 + 10, 12, worldSize/2 + 10)),
+];
+
+// ============ ИНФО О ЦЕЛИ ============
+const targetInfo = document.getElementById('targetInfo');
+function updateTargetInfo() {
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const mobMeshes = allMobs.filter(m => m.alive).map(m => m.mesh);
+  const hits = raycaster.intersectObjects(mobMeshes, true);
+  if (hits.length > 0) {
+    let obj = hits[0].object;
+    while (obj && !obj.userData.mob) obj = obj.parent;
+    if (obj && obj.userData.mob) {
+      const m = obj.userData.mob;
+      const names = { cow: '🐄 Корова', pig: '🐷 Свинья', zombie: '🧟 Зомби' };
+      targetInfo.textContent = `${names[m.type]}: ${m.health} HP`;
+      targetInfo.style.color = m.aggro ? '#f87171' : '#86efac';
+      return;
+    }
+  }
+  targetInfo.textContent = 'Прицельтесь в моба';
+  targetInfo.style.color = '#f87171';
+}
+
+// ============ ФИЗИКА ИГРОКА ============
 function updatePlayer(dt) {
-  // Направление движения
-  const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+  const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
   const move = new THREE.Vector3();
-  
-  if (keys['KeyW']) move.add(forward);
-  if (keys['KeyS']) move.sub(forward);
+  if (keys['KeyW']) move.add(fwd);
+  if (keys['KeyS']) move.sub(fwd);
   if (keys['KeyD']) move.add(right);
   if (keys['KeyA']) move.sub(right);
-  if (move.length() > 0) move.normalize();
-  
-  // Горизонтальное движение с коллизиями (по осям отдельно)
-  const newPos = player.pos.clone();
-  newPos.x += move.x * moveSpeed * dt;
-  if (!checkCollision(newPos)) player.pos.x = newPos.x;
-  else {
-    // Пробуем минимальный шаг
-    const test = player.pos.clone();
-    test.x += move.x * moveSpeed * dt * 0.1;
-    if (!checkCollision(test)) player.pos.x = test.x;
-  }
-  
-  newPos.copy(player.pos);
-  newPos.z += move.z * moveSpeed * dt;
-  if (!checkCollision(newPos)) player.pos.z = newPos.z;
-  else {
-    const test = player.pos.clone();
-    test.z += move.z * moveSpeed * dt * 0.1;
-    if (!checkCollision(test)) player.pos.z = test.z;
-  }
-  
-  // Вертикаль
-  player.vel.y -= gravity * dt;
-  const testY = player.pos.clone();
-  testY.y += player.vel.y * dt;
-  
-  if (checkCollision(testY)) {
+  if (move.lengthSq() > 0) move.normalize();
+
+  const speed = (keys['ShiftLeft'] || keys['ShiftRight']) ? 9 : 5;
+
+  // X
+  const t = player.pos.clone();
+  t.x += move.x * speed * dt;
+  if (!collides(t)) player.pos.x = t.x;
+  else { t.copy(player.pos); t.x += move.x * speed * dt * 0.1; if (!collides(t)) player.pos.x = t.x; }
+  // Z
+  t.copy(player.pos);
+  t.z += move.z * speed * dt;
+  if (!collides(t)) player.pos.z = t.z;
+  else { t.copy(player.pos); t.z += move.z * speed * dt * 0.1; if (!collides(t)) player.pos.z = t.z; }
+  // Y
+  player.vel.y -= 25 * dt;
+  t.copy(player.pos);
+  t.y += player.vel.y * dt;
+  if (collides(t)) {
     if (player.vel.y < 0) {
-      // Приземлились — ставим на пол
-      player.pos.y = Math.floor(player.pos.y - playerHeight) + playerHeight;
+      player.pos.y = Math.floor(player.pos.y - PH) + PH;
       player.vel.y = 0;
       player.onGround = true;
-    } else {
-      player.vel.y = 0;
-    }
+    } else player.vel.y = 0;
   } else {
-    player.pos.y = testY.y;
+    player.pos.y = t.y;
     player.onGround = false;
   }
-  
-  // Прыжок
-  if (keys['Space'] && player.onGround) {
-    player.vel.y = jumpSpeed;
-    player.onGround = false;
-  }
-  
-  // Респавн при падении
-  if (player.pos.y < -20) {
-    player.pos.set(worldSize / 2, 15, worldSize / 2);
-    player.vel.set(0, 0, 0);
-  }
-  
-  // Камера
+  if (keys['Space'] && player.onGround) { player.vel.y = 8; player.onGround = false; }
+  if (player.pos.y < -20) { player.pos.set(worldSize/2, 16, worldSize/2); player.vel.set(0,0,0); }
+
   camera.position.copy(player.pos);
   camera.rotation.order = 'YXZ';
   camera.rotation.y = player.yaw;
@@ -478,18 +589,17 @@ function updatePlayer(dt) {
 }
 
 // ============ ЦИКЛ ============
-let lastTime = performance.now();
+let last = performance.now();
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
-  lastTime = now;
-  
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
   if (started) {
     updatePlayer(dt);
-    enemy.update(dt);
+    for (const m of mobs) m.update(dt, player.pos);
+    updateTargetInfo();
   }
-  
   renderer.render(scene, camera);
 }
 animate();
