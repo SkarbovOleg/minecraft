@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Web Minecraft</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; font-family: monospace; background: #000; }
+  canvas { display: block; }
+  #crosshair {
+    position: fixed; top: 50%; left: 50%; width: 20px; height: 20px;
+    transform: translate(-50%, -50%); pointer-events: none; z-index: 10;
+  }
+  #crosshair::before, #crosshair::after {
+    content: ''; position: absolute; background: white;
+  }
+  #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+  #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+  #info {
+    position: fixed; top: 10px; left: 10px; color: white; font-size: 13px;
+    background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px;
+    pointer-events: none; z-index: 10; line-height: 1.5;
+  }
+  #startScreen {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: white; cursor: pointer;
+  }
+  #startScreen h1 { font-size: 48px; margin-bottom: 20px; color: #4ade80; }
+  #startScreen p { font-size: 16px; margin: 5px; opacity: 0.8; }
+  #health {
+    position: fixed; bottom: 20px; left: 20px; color: #f87171; font-size: 20px;
+    z-index: 10; pointer-events: none;
+  }
+  #enemyHealth {
+    position: fixed; top: 10px; right: 10px; color: #f87171; font-size: 16px;
+    background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 5px;
+    z-index: 10; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="crosshair"></div>
+<div id="info">
+  <b>WASD</b> — движение &nbsp;|&nbsp; <b>Пробел</b> — прыжок<br>
+  <b>ЛКМ</b> — копать / атаковать &nbsp;|&nbsp; <b>ПКМ</b> — ставить блок<br>
+  <b>1/2/3</b> — выбрать блок (трава/камень/дерево) &nbsp;|&nbsp; <b>ESC</b> — пауза
+</div>
+<div id="health">❤ ❤ ❤</div>
+<div id="enemyHealth">Враг: 3 HP</div>
+
+<div id="startScreen">
+  <h1>WEB MINECRAFT</h1>
+  <p>Нажмите, чтобы начать</p>
+  <p style="margin-top:20px; font-size:12px;">Управление мышью будет захвачено</p>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ============ НАСТРОЙКА СЦЕНЫ ============
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 30, 80);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// Освещение
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(50, 80, 30);
+sun.castShadow = true;
+sun.shadow.camera.left = -60;
+sun.shadow.camera.right = 60;
+sun.shadow.camera.top = 60;
+sun.shadow.camera.bottom = -60;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+
+// ============ ШУМ ПЕРЛИНА (встроенный) ============
+// Упрощённый 2D simplex-подобный шум
+const perm = new Uint8Array(512);
+const p = new Uint8Array(256);
+for (let i = 0; i < 256; i++) p[i] = i;
+for (let i = 255; i > 0; i--) {
+  const j = Math.floor(Math.random() * (i + 1));
+  [p[i], p[j]] = [p[j], p[i]];
+}
+for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+
+function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(a, b, t) { return a + t * (b - a); }
+function grad(hash, x, y) {
+  const h = hash & 7;
+  const u = h < 4 ? x : y;
+  const v = h < 4 ? y : x;
+  return ((h & 1) ? -u : u) + ((h & 2) ? -2 * v : 2 * v);
+}
+function noise2D(x, y) {
+  const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+  x -= Math.floor(x); y -= Math.floor(y);
+  const u = fade(x), v = fade(y);
+  const A = perm[X] + Y, B = perm[X + 1] + Y;
+  return lerp(
+    lerp(grad(perm[A], x, y), grad(perm[B], x - 1, y), u),
+    lerp(grad(perm[A + 1], x, y - 1), grad(perm[B + 1], x - 1, y - 1), u),
+    v
+  );
+}
+function fbm(x, y) {
+  let v = 0, amp = 1, freq = 1;
+  for (let i = 0; i < 4; i++) {
+    v += noise2D(x * freq, y * freq) * amp;
+    amp *= 0.5; freq *= 2;
+  }
+  return v;
+}
+
+// ============ МАТЕРИАЛЫ БЛОКОВ ============
+const blockTypes = {
+  grass:  { color: 0x4ade80, name: 'Трава' },
+  dirt:   { color: 0x8b5a3c, name: 'Земля' },
+  stone:  { color: 0x808080, name: 'Камень' },
+  wood:   { color: 0x8b4513, name: 'Дерево' },
+  leaf:   { color: 0x228b22, name: 'Листва' },
+};
+const materials = {};
+for (const k in blockTypes) {
+  materials[k] = new THREE.MeshLambertMaterial({ color: blockTypes[k].color });
+}
+
+// ============ ХРАНИЛИЩЕ БЛОКОВ ============
+const worldSize = 40;     // размер мира по X и Z
+const maxHeight = 20;
+const blocks = new Map();  // "x,y,z" -> { mesh, type }
+const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+function key(x, y, z) { return `${x},${y},${z}`; }
+
+function addBlock(x, y, z, type, skipStore = false) {
+  const k = key(x, y, z);
+  if (blocks.has(k)) return null;
+  const mesh = new THREE.Mesh(blockGeometry, materials[type]);
+  mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData = { x, y, z, type };
+  scene.add(mesh);
+  if (!skipStore) blocks.set(k, { mesh, type });
+  return mesh;
+}
+
+function removeBlock(x, y, z) {
+  const k = key(x, y, z);
+  const b = blocks.get(k);
+  if (b) {
+    scene.remove(b.mesh);
+    blocks.delete(k);
+  }
+}
+
+// ============ ГЕНЕРАЦИЯ МИРА ============
+function generateWorld() {
+  const trees = [];
+  const heights = new Map();
+  
+  for (let x = 0; x < worldSize; x++) {
+    for (let z = 0; z < worldSize; z++) {
+      const n = fbm(x * 0.08, z * 0.08);
+      const height = Math.max(2, Math.floor(n * 5 + 6));
+      heights.set(key(x, 0, z), height);
+      
+      for (let y = 0; y < height; y++) {
+        let type = 'stone';
+        if (y === height - 1) type = 'grass';
+        else if (y >= height - 3) type = 'dirt';
+        addBlock(x, y, z, type);
+      }
+      
+      if (Math.random() < 0.03 && height > 4 && height < 12) {
+        trees.push({ x, y: height, z });
+      }
+    }
+  }
+  
+  // Деревья
+  for (const t of trees) {
+    const trunkHeight = 3 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < trunkHeight; i++) {
+      addBlock(t.x, t.y + i, t.z, 'wood');
+    }
+    const topY = t.y + trunkHeight;
+    // Листва — крест + верхушка
+    const leaves = [
+      [0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
+      [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
+      [0, 1, 0], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
+      [0, 2, 0],
+    ];
+    for (const [dx, dy, dz] of leaves) {
+      addBlock(t.x + dx, topY + dy, t.z + dz, 'leaf');
+    }
+  }
+}
+
+generateWorld();
+
+// ============ ИГРОК (камера + физика) ============
+const player = {
+  pos: new THREE.Vector3(worldSize / 2, 15, worldSize / 2),
+  vel: new THREE.Vector3(),
+  yaw: 0,
+  pitch: 0,
+  onGround: false,
+  health: 3,
+};
+const playerHeight = 1.7;
+const playerRadius = 0.3;
+const gravity = 25;
+const jumpSpeed = 8;
+const moveSpeed = 5;
+
+// ============ УПРАВЛЕНИЕ ============
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Digit1') currentBlock = 'grass';
+  if (e.code === 'Digit2') currentBlock = 'stone';
+  if (e.code === 'Digit3') currentBlock = 'wood';
+  if (e.code === 'Digit4') currentBlock = 'dirt';
+});
+addEventListener('keyup', e => keys[e.code] = false);
+
+let currentBlock = 'grass';
+let started = false;
+
+document.getElementById('startScreen').addEventListener('click', () => {
+  document.getElementById('startScreen').style.display = 'none';
+  renderer.domElement.requestPointerLock();
+  started = true;
+});
+
+renderer.domElement.addEventListener('click', () => {
+  if (started && document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock();
+  }
+});
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== renderer.domElement && started) {
+    document.getElementById('startScreen').style.display = 'flex';
+    document.getElementById('startScreen').querySelector('h1').textContent = 'ПАУЗА';
+    document.getElementById('startScreen').querySelector('p').textContent = 'Нажмите, чтобы продолжить';
+    started = false;
+  }
+});
+
+addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  player.yaw -= e.movementX * 0.002;
+  player.pitch -= e.movementY * 0.002;
+  player.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, player.pitch));
+});
+
+// ============ RAYCASTER ДЛЯ ВЗАИМОДЕЙСТВИЯ ============
+const raycaster = new THREE.Raycaster();
+raycaster.far = 6;
+
+addEventListener('mousedown', e => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  
+  // Луч из центра экрана
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  
+  // Сначала проверяем врага
+  const enemyHit = raycaster.intersectObject(enemy.mesh);
+  if (enemyHit.length > 0) {
+    enemy.health--;
+    document.getElementById('enemyHealth').textContent = `Враг: ${enemy.health} HP`;
+    enemy.mesh.material.color.setHex(0xffffff);
+    setTimeout(() => { if (enemy.mesh.parent) enemy.mesh.material.color.setHex(0xcc2222); }, 100);
+    if (enemy.health <= 0) {
+      enemy.respawn();
+    }
+    return;
+  }
+  
+  // Затем блоки
+  const allMeshes = [];
+  blocks.forEach(b => allMeshes.push(b.mesh));
+  const hits = raycaster.intersectObjects(allMeshes);
+  
+  if (hits.length > 0) {
+    const hit = hits[0];
+    const d = hit.object.userData;
+    
+    if (e.button === 0) {
+      // ЛКМ — удалить
+      removeBlock(d.x, d.y, d.z);
+    } else if (e.button === 2) {
+      // ПКМ — поставить
+      const normal = hit.face.normal.clone();
+      const nx = d.x + normal.x, ny = d.y + normal.y, nz = d.z + normal.z;
+      // Не ставить внутрь игрока
+      const dx = nx + 0.5 - player.pos.x;
+      const dz = nz + 0.5 - player.pos.z;
+      const dy = ny + 0.5 - (player.pos.y - playerHeight / 2);
+      if (Math.abs(dx) < 0.9 && Math.abs(dz) < 0.9 && Math.abs(dy) < 1.2) return;
+      addBlock(nx, ny, nz, currentBlock);
+    }
+  }
+});
+
+addEventListener('contextmenu', e => e.preventDefault());
+
+// ============ МОБ (ВРАГ) ============
+class Enemy {
+  constructor() {
+    this.health = 3;
+    const geom = new THREE.BoxGeometry(1, 2, 1);
+    const mat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
+    this.mesh = new THREE.Mesh(geom, mat);
+    this.mesh.castShadow = true;
+    this.mesh.position.set(worldSize / 2 + 8, 12, worldSize / 2 + 8);
+    scene.add(this.mesh);
+    this.speed = 2.5;
+    this.damageCooldown = 0;
+  }
+  
+  respawn() {
+    this.health = 3;
+    document.getElementById('enemyHealth').textContent = 'Враг: 3 HP';
+    this.mesh.position.set(
+      player.pos.x + (Math.random() - 0.5) * 20,
+      15,
+      player.pos.z + (Math.random() - 0.5) * 20
+    );
+  }
+  
+  update(dt) {
+    const dx = player.pos.x - this.mesh.position.x;
+    const dz = player.pos.z - this.mesh.position.z;
+    const dy = player.pos.y - this.mesh.position.y;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    
+    if (dist < 20 && dist > 0.1) {
+      // Идёт к игроку
+      this.mesh.position.x += (dx / dist) * this.speed * dt;
+      this.mesh.position.z += (dz / dist) * this.speed * dt;
+    }
+    
+    // Гравитация моба
+    this.mesh.position.y += dy * 0.5 * dt;
+    
+    // Урон
+    this.damageCooldown -= dt;
+    const dist3d = this.mesh.position.distanceTo(player.pos);
+    if (dist3d < 1.8 && this.damageCooldown <= 0) {
+      player.health--;
+      this.damageCooldown = 1;
+      document.getElementById('health').textContent = '❤ '.repeat(Math.max(0, player.health)) + '💀'.repeat(Math.max(0, 3 - player.health));
+      if (player.health <= 0) {
+        player.health = 3;
+        player.pos.set(worldSize / 2, 15, worldSize / 2);
+        player.vel.set(0, 0, 0);
+        document.getElementById('health').textContent = '❤ ❤ ❤';
+      }
+    }
+  }
+}
+const enemy = new Enemy();
+
+// ============ КОЛЛИЗИИ ============
+function isSolid(x, y, z) {
+  return blocks.has(key(x, y, z));
+}
+
+function checkCollision(pos) {
+  // Проверяем AABB игрока
+  const minX = Math.floor(pos.x - playerRadius);
+  const maxX = Math.floor(pos.x + playerRadius);
+  const minY = Math.floor(pos.y - playerHeight);
+  const maxY = Math.floor(pos.y);
+  const minZ = Math.floor(pos.z - playerRadius);
+  const maxZ = Math.floor(pos.z + playerRadius);
+  
+  for (let x = minX; x <= maxX; x++)
+    for (let y = minY; y <= maxY; y++)
+      for (let z = minZ; z <= maxZ; z++)
+        if (isSolid(x, y, z)) return true;
+  return false;
+}
+
+// ============ ОБНОВЛЕНИЕ ИГРОКА ============
+function updatePlayer(dt) {
+  // Направление движения
+  const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+  const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+  const move = new THREE.Vector3();
+  
+  if (keys['KeyW']) move.add(forward);
+  if (keys['KeyS']) move.sub(forward);
+  if (keys['KeyD']) move.add(right);
+  if (keys['KeyA']) move.sub(right);
+  if (move.length() > 0) move.normalize();
+  
+  // Горизонтальное движение с коллизиями (по осям отдельно)
+  const newPos = player.pos.clone();
+  newPos.x += move.x * moveSpeed * dt;
+  if (!checkCollision(newPos)) player.pos.x = newPos.x;
+  else {
+    // Пробуем минимальный шаг
+    const test = player.pos.clone();
+    test.x += move.x * moveSpeed * dt * 0.1;
+    if (!checkCollision(test)) player.pos.x = test.x;
+  }
+  
+  newPos.copy(player.pos);
+  newPos.z += move.z * moveSpeed * dt;
+  if (!checkCollision(newPos)) player.pos.z = newPos.z;
+  else {
+    const test = player.pos.clone();
+    test.z += move.z * moveSpeed * dt * 0.1;
+    if (!checkCollision(test)) player.pos.z = test.z;
+  }
+  
+  // Вертикаль
+  player.vel.y -= gravity * dt;
+  const testY = player.pos.clone();
+  testY.y += player.vel.y * dt;
+  
+  if (checkCollision(testY)) {
+    if (player.vel.y < 0) {
+      // Приземлились — ставим на пол
+      player.pos.y = Math.floor(player.pos.y - playerHeight) + playerHeight;
+      player.vel.y = 0;
+      player.onGround = true;
+    } else {
+      player.vel.y = 0;
+    }
+  } else {
+    player.pos.y = testY.y;
+    player.onGround = false;
+  }
+  
+  // Прыжок
+  if (keys['Space'] && player.onGround) {
+    player.vel.y = jumpSpeed;
+    player.onGround = false;
+  }
+  
+  // Респавн при падении
+  if (player.pos.y < -20) {
+    player.pos.set(worldSize / 2, 15, worldSize / 2);
+    player.vel.set(0, 0, 0);
+  }
+  
+  // Камера
+  camera.position.copy(player.pos);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = player.yaw;
+  camera.rotation.x = player.pitch;
+}
+
+// ============ ЦИКЛ ============
+let lastTime = performance.now();
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  
+  if (started) {
+    updatePlayer(dt);
+    enemy.update(dt);
+  }
+  
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+
+</body>
+</html>
