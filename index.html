@@ -99,7 +99,7 @@ scene.background = new THREE.Color(0x9dd0ff);
 scene.fog = new THREE.Fog(0x9dd0ff, 40, 110);
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 300);
-const renderer = new THREE.WebGLRenderer({ antialias:true });
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
@@ -112,7 +112,8 @@ const sun = new THREE.DirectionalLight(0xfff5e0, 1.3);
 sun.position.set(60, 100, 40);
 sun.castShadow = true;
 Object.assign(sun.shadow.camera, { left:-80, right:80, top:80, bottom:-80, far:250 });
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.updateProjectionMatrix();  // FIX: пересчёт матрицы проекции
 scene.add(sun);
 
 /* ==================== ШУМ (Perlin) ==================== */
@@ -152,6 +153,7 @@ for (const k in BLOCK_DEF) materials[k] = new THREE.MeshLambertMaterial({ color:
 
 const WORLD = 40;
 const blocks = new Map();
+const blockMeshes = [];            // FIX: кэш мешей для рейкаста
 const blockGeo = new THREE.BoxGeometry(1,1,1);
 const key = (x,y,z) => `${x},${y},${z}`;
 
@@ -164,10 +166,16 @@ function addBlock(x,y,z,type){
   m.userData={x,y,z,type};
   scene.add(m);
   blocks.set(k,{mesh:m,type});
+  blockMeshes.push(m);
 }
 function removeBlock(x,y,z){
   const k=key(x,y,z), b=blocks.get(k);
-  if (b){ scene.remove(b.mesh); blocks.delete(k); }
+  if (b){
+    scene.remove(b.mesh);
+    blocks.delete(k);
+    const idx = blockMeshes.indexOf(b.mesh);
+    if (idx >= 0) blockMeshes.splice(idx, 1);
+  }
 }
 
 /* ==================== ГЕНЕРАЦИЯ ==================== */
@@ -185,8 +193,11 @@ function removeBlock(x,y,z){
     const th=3+((Math.random()*2)|0);
     for (let i=0;i<th;i++) addBlock(t.x,t.y+i,t.z,'wood');
     const top=t.y+th;
-    for (const [dx,dy,dz] of [[0,0,0],[1,0,0],[-1,0,0],[0,0,1],[0,0,-1],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,0],[1,1,0],[-1,1,0],[0,1,1],[0,1,-1],[0,2,0]])
-      addBlock(t.x+dx,top+dy,t.z+dz,'leaf');
+    for (const [dx,dy,dz] of [[0,0,0],[1,0,0],[-1,0,0],[0,0,1],[0,0,-1],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,0],[1,1,0],[-1,1,0],[0,1,1],[0,1,-1],[0,2,0]]){
+      const lx=t.x+dx, ly=top+dy, lz=t.z+dz;
+      // FIX: не ставим листья за пределами мира
+      if (lx>=0 && lx<WORLD && lz>=0 && lz<WORLD) addBlock(lx,ly,lz,'leaf');
+    }
   }
 })();
 
@@ -202,7 +213,8 @@ const tools = {
   sword:  { owned:false, dur:0, max:60, speed:1,   dmg:4, name:'Меч' },
 };
 let selectedTool = null;
- /* ==================== UI ==================== */
+
+/* ==================== UI ==================== */
 const $ = id => document.getElementById(id);
 const toastEl = $('toast');
 let toastTimer;
@@ -230,6 +242,8 @@ function updateTools(){
 
 /* ==================== КРАФТ ==================== */
 const RECIPES = [
+  // FIX: добавлен рецепт wood → plank (иначе игра неиграбельна)
+  { in:['wood',null,null, null,null,null, null,null,null], out:{plank:4} },
   { in:[null,'plank',null, 'plank','plank','plank', null,'plank',null], out:{place:'workbench'} },
   { in:['plank',null,null, 'plank',null,null, null,null,null], out:{stick:4} },
   { in:['plank','plank','plank', null,'stick',null, null,'stick',null], out:{tool:'pickaxe'} },
@@ -242,8 +256,8 @@ const craftGrid = new Array(9).fill(null).map(()=>({res:null, count:0}));
 const ITEM_ICON = { plank:'🟫', stick:'🥢', stone:'⬜', iron:'💎', wood:'🪵' };
 const TOOL_ICON = { pickaxe:'⛏️', axe:'🪓', shovel:'🥄', sword:'🗡️' };
 
-function invCount(res){ return inv[res] || 0; }
-function consume(res, n){ if (res in inv) inv[res] -= n; }
+const invCount = res => inv[res] || 0;
+const consume = (res, n) => { if (res in inv) inv[res] -= n; };
 
 function matchRecipe(){
   const grid = craftGrid.map(c=>c.res);
@@ -357,6 +371,11 @@ addEventListener('keydown', e => {
     currentBlock = map[e.code];
     document.querySelectorAll('.slot').forEach(s=>s.classList.toggle('active', s.dataset.type===currentBlock));
   }
+  // FIX: прыжок по keydown, а не по удержанию в updatePlayer
+  if (e.code === 'Space' && player.onGround && started && !e.repeat){
+    player.vel.y = 8;
+    player.onGround = false;
+  }
   if (e.code === 'KeyQ'){
     const owned = Object.keys(tools).filter(k=>tools[k].owned);
     if (!owned.length){ toast('Нет инструментов'); return; }
@@ -396,12 +415,16 @@ addEventListener('mousemove', e => {
 const raycaster = new THREE.Raycaster();
 raycaster.far = 6;
 const allMobs = [];
+const _camCenter = new THREE.Vector2(0,0);
 
 addEventListener('mousedown', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
-  raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+  raycaster.setFromCamera(_camCenter, camera);
 
-  const mobHits = raycaster.intersectObjects(allMobs.filter(m=>m.alive).map(m=>m.mesh), true);
+  // 1) мобы
+  const mobMeshes = [];
+  for (const m of allMobs) if (m.alive) mobMeshes.push(m.mesh);
+  const mobHits = raycaster.intersectObjects(mobMeshes, true);
   if (mobHits.length > 0){
     let obj = mobHits[0].object;
     while (obj && !obj.userData.mob) obj = obj.parent;
@@ -413,9 +436,8 @@ addEventListener('mousedown', e => {
     }
   }
 
-  const meshes = [];
-  blocks.forEach(b => meshes.push(b.mesh));
-  const hits = raycaster.intersectObjects(meshes);
+  // 2) блоки (кэш blockMeshes)
+  const hits = raycaster.intersectObjects(blockMeshes);
   if (!hits.length) return;
   const hit = hits[0], d = hit.object.userData;
 
@@ -423,13 +445,17 @@ addEventListener('mousedown', e => {
     const def = BLOCK_DEF[d.type];
     if (def.drop){
       let amount = def.amount || 1;
-      if (selectedTool && def.tool === selectedTool) amount *= 2;
+      const toolMatches = selectedTool && def.tool === selectedTool;
+      // FIX: инструмент изнашивается только при подходящем блоке
+      if (toolMatches){
+        amount *= 2;
+        damageTool();
+      }
       inv[def.drop] = (inv[def.drop]||0) + amount;
       updateRes();
     }
     spawnParticles(hit.point, def.color);
     playSound('dig');
-    if (selectedTool) damageTool();
     removeBlock(d.x, d.y, d.z);
   } else if (e.button === 2){
     if (d.type === 'workbench'){ openCraft(); return; }
@@ -455,18 +481,30 @@ function damageTool(){
   updateTools();
 }
 
-/* ==================== ЧАСТИЦЫ ==================== */
+/* ==================== ЧАСТИЦЫ (пул) ==================== */
 const particles = [];
+const particlePool = [];
+const partGeo = new THREE.BoxGeometry(0.08,0.08,0.08);
+const partMats = {};
+const PARTICLE_LIFE = 0.6;
+
+function getPartMat(color){
+  return partMats[color] || (partMats[color] = new THREE.MeshLambertMaterial({ color }));
+}
+
 function spawnParticles(pos, color){
+  const mat = getPartMat(color);
   for (let i=0;i<8;i++){
-    const geo = new THREE.BoxGeometry(0.08,0.08,0.08);
-    const mat = new THREE.MeshLambertMaterial({ color });
-    const p = new THREE.Mesh(geo, mat);
+    let p = particlePool.pop();
+    if (!p){
+      p = new THREE.Mesh(partGeo, mat);
+    } else {
+      p.material = mat;
+    }
     p.position.copy(pos);
-    p.userData = {
-      vel: new THREE.Vector3((Math.random()-0.5)*4, Math.random()*4, (Math.random()-0.5)*4),
-      life: 0.6,
-    };
+    if (!p.userData.vel) p.userData.vel = new THREE.Vector3();
+    p.userData.vel.set((Math.random()-0.5)*4, Math.random()*4, (Math.random()-0.5)*4);
+    p.userData.life = PARTICLE_LIFE;
     scene.add(p);
     particles.push(p);
   }
@@ -475,7 +513,12 @@ function updateParticles(dt){
   for (let i=particles.length-1;i>=0;i--){
     const p = particles[i];
     p.userData.life -= dt;
-    if (p.userData.life <= 0){ scene.remove(p); particles.splice(i,1); continue; }
+    if (p.userData.life <= 0){
+      scene.remove(p);
+      particlePool.push(p);
+      particles.splice(i,1);
+      continue;
+    }
     p.userData.vel.y -= 15*dt;
     p.position.addScaledVector(p.userData.vel, dt);
   }
@@ -496,7 +539,8 @@ function playSound(type){
     o.start(); o.stop(audioCtx.currentTime+0.08);
   } catch(e){}
 }
- /* ==================== КОЛЛИЗИИ ==================== */
+
+/* ==================== КОЛЛИЗИИ ==================== */
 const isSolid = (x,y,z) => blocks.has(key(x,y,z));
 
 function collides(pos, r=PR, h=PH){
@@ -510,8 +554,11 @@ function collides(pos, r=PR, h=PH){
   return false;
 }
 
-function groundHeight(x,z){
-  for (let y=30;y>=0;y--) if (isSolid(Math.floor(x),y,Math.floor(z))) return y+1;
+// FIX: перебор от ожидаемой высоты, а не всегда с 30
+function groundHeight(x,z,fromY=30){
+  const fx = Math.floor(x), fz = Math.floor(z);
+  const start = Math.min(30, Math.floor(fromY)+1);
+  for (let y=start;y>=0;y--) if (isSolid(fx,y,fz)) return y+1;
   return 0;
 }
 
@@ -546,19 +593,16 @@ class Mob {
     const bodyMat = new THREE.MeshLambertMaterial({ color: def.bodyC });
     const headMat = new THREE.MeshLambertMaterial({ color: def.headC });
 
-    // Тело
     const body = new THREE.Mesh(new THREE.BoxGeometry(...def.body), bodyMat);
     body.position.y = def.body[1]/2;
     body.castShadow = body.receiveShadow = true;
     g.add(body);
 
-    // Голова
     const head = new THREE.Mesh(new THREE.BoxGeometry(...def.head), headMat);
     head.position.set(0, def.body[1]*0.9, def.body[2]/2 + def.head[2]/2 - 0.05);
     head.castShadow = true;
     g.add(head);
 
-    // Глаза
     const eyeMat = new THREE.MeshBasicMaterial({ color:0x111111 });
     const eyeGeo = new THREE.BoxGeometry(0.08,0.08,0.05);
     for (const sx of [-1,1]){
@@ -567,7 +611,6 @@ class Mob {
       head.add(eye);
     }
 
-    // Рога коровы
     if (this.type === 'cow'){
       const hornMat = new THREE.MeshLambertMaterial({ color:0xf0e0c0 });
       const hornGeo = new THREE.BoxGeometry(0.08,0.2,0.08);
@@ -578,7 +621,6 @@ class Mob {
       }
     }
 
-    // Ноги
     const legGeo = new THREE.BoxGeometry(0.18,0.5,0.18);
     const legY  = -0.25 - def.body[1]/2 + 0.1;
     const offX  = def.body[0]/2 - 0.1;
@@ -597,7 +639,6 @@ class Mob {
     if (!this.alive) return;
     this.health -= dmg;
 
-    // Мигание белым
     this.mesh.traverse(o => {
       if (o.material && o.material.color){
         if (o.userData._origColor === undefined) o.userData._origColor = o.material.color.getHex();
@@ -619,18 +660,12 @@ class Mob {
   die(){
     this.alive = false;
     scene.remove(this.mesh);
-    // Дроп
-    if (this.type === 'cow'){ inv.wood += 0; } // коровы дают кожу — здесь не реализовано
-    // Респавн через 5 секунд
     setTimeout(() => {
       this.health = this.maxHealth;
       this.alive = true;
-      this.mesh.position.set(
-        WORLD/2 + (Math.random()-0.5)*20,
-        15,
-        WORLD/2 + (Math.random()-0.5)*20
-      );
-      this.mesh.position.y = groundHeight(this.mesh.position.x, this.mesh.position.z) + 1;
+      const x = WORLD/2 + (Math.random()-0.5)*20;
+      const z = WORLD/2 + (Math.random()-0.5)*20;
+      this.mesh.position.set(x, groundHeight(x,z) + 1, z);
       scene.add(this.mesh);
     }, 5000);
   }
@@ -643,13 +678,11 @@ class Mob {
     const dist2D = Math.hypot(dx, dz);
 
     if (this.aggro){
-      // Зомби: идёт к игроку
       if (dist2D > 0.3 && dist2D < 20){
         pos.x += (dx/dist2D) * this.speed * dt;
         pos.z += (dz/dist2D) * this.speed * dt;
         this.mesh.rotation.y = Math.atan2(dx, dz);
       }
-      // Атака
       this.hitCooldown -= dt;
       const d3 = pos.distanceTo(playerPos);
       if (d3 < 1.6 && this.hitCooldown <= 0){
@@ -666,7 +699,6 @@ class Mob {
         }
       }
     } else {
-      // Мирные: бродят
       this.wanderTimer -= dt;
       if (this.wanderTimer <= 0){
         this.wanderTimer = 2 + Math.random()*3;
@@ -682,7 +714,6 @@ class Mob {
         pos.x += this.wanderDir.x * this.speed * dt;
         pos.z += this.wanderDir.z * this.speed * dt;
       }
-      // Убегают от игрока
       if (dist2D < 3 && dist2D > 0.1){
         pos.x -= (dx/dist2D) * this.speed * 1.5 * dt;
         pos.z -= (dz/dist2D) * this.speed * 1.5 * dt;
@@ -690,17 +721,15 @@ class Mob {
       }
     }
 
-    // Ограничение мира
     pos.x = Math.max(1, Math.min(WORLD-1, pos.x));
     pos.z = Math.max(1, Math.min(WORLD-1, pos.z));
 
-    // Привязка к земле
-    const gh = groundHeight(pos.x, pos.z);
+    // FIX: перебор от текущей высоты, а не с 30
+    const gh = groundHeight(pos.x, pos.z, pos.y);
     pos.y += (gh - pos.y) * Math.min(1, dt * 10);
   }
 }
 
-// Создаём мобов
 const mobs = [
   new Mob('cow',    new THREE.Vector3(WORLD/2+5,  12, WORLD/2+5)),
   new Mob('cow',    new THREE.Vector3(WORLD/2-6,  12, WORLD/2+3)),
@@ -714,8 +743,9 @@ const targetInfo = $('targetInfo');
 const MOB_NAMES = { cow:'🐄 Корова', pig:'🐷 Свинья', zombie:'🧟 Зомби' };
 
 function updateTargetInfo(){
-  raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
-  const mobMeshes = allMobs.filter(m => m.alive).map(m => m.mesh);
+  raycaster.setFromCamera(_camCenter, camera);
+  const mobMeshes = [];
+  for (const m of allMobs) if (m.alive) mobMeshes.push(m.mesh);
   const hits = raycaster.intersectObjects(mobMeshes, true);
   if (hits.length > 0){
     let obj = hits[0].object;
@@ -732,55 +762,57 @@ function updateTargetInfo(){
 }
 
 /* ==================== ФИЗИКА ИГРОКА ==================== */
-function updatePlayer(dt){
-  const fwd   = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-  const right = new THREE.Vector3( Math.cos(player.yaw), 0, -Math.sin(player.yaw));
-  const move  = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _move = new THREE.Vector3();
+const _t = new THREE.Vector3();
 
-  if (keys['KeyW']) move.add(fwd);
-  if (keys['KeyS']) move.sub(fwd);
-  if (keys['KeyD']) move.add(right);
-  if (keys['KeyA']) move.sub(right);
-  if (move.lengthSq() > 0) move.normalize();
+function updatePlayer(dt){
+  _fwd.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+  _right.set(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+  _move.set(0,0,0);
+
+  if (keys['KeyW']) _move.add(_fwd);
+  if (keys['KeyS']) _move.sub(_fwd);
+  if (keys['KeyD']) _move.add(_right);
+  if (keys['KeyA']) _move.sub(_right);
+  if (_move.lengthSq() > 0) _move.normalize();
 
   const speed = (keys['ShiftLeft'] || keys['ShiftRight']) ? 9 : 5;
-  const t = player.pos.clone();
 
   // X
-  t.copy(player.pos);
-  t.x += move.x * speed * dt;
-  if (!collides(t)) player.pos.x = t.x;
-  else { t.copy(player.pos); t.x += move.x * speed * dt * 0.1; if (!collides(t)) player.pos.x = t.x; }
+  _t.copy(player.pos);
+  _t.x += _move.x * speed * dt;
+  if (!collides(_t)) player.pos.x = _t.x;
+  else { _t.copy(player.pos); _t.x += _move.x * speed * dt * 0.1; if (!collides(_t)) player.pos.x = _t.x; }
 
   // Z
-  t.copy(player.pos);
-  t.z += move.z * speed * dt;
-  if (!collides(t)) player.pos.z = t.z;
-  else { t.copy(player.pos); t.z += move.z * speed * dt * 0.1; if (!collides(t)) player.pos.z = t.z; }
+  _t.copy(player.pos);
+  _t.z += _move.z * speed * dt;
+  if (!collides(_t)) player.pos.z = _t.z;
+  else { _t.copy(player.pos); _t.z += _move.z * speed * dt * 0.1; if (!collides(_t)) player.pos.z = _t.z; }
 
-  // Y (гравитация)
+  // Y
   player.vel.y -= 25 * dt;
-  t.copy(player.pos);
-  t.y += player.vel.y * dt;
-  if (collides(t)){
+  _t.copy(player.pos);
+  _t.y += player.vel.y * dt;
+  if (collides(_t)){
     if (player.vel.y < 0){
-      player.pos.y = Math.floor(player.pos.y - PH) + PH;
+      // FIX: ищем ближайшую свободную позицию над блоком
+      let y = Math.floor(player.pos.y - PH) + PH;
+      // если всё ещё внутри — поднимаем до выхода из коллизии
+      while (collides({x:player.pos.x, y:y, z:player.pos.z, clone(){return this;}}, PR, PH)) y += 0.1;
+      player.pos.y = y;
       player.vel.y = 0;
       player.onGround = true;
     } else {
       player.vel.y = 0;
     }
   } else {
-    player.pos.y = t.y;
+    player.pos.y = _t.y;
     player.onGround = false;
   }
 
-  if (keys['Space'] && player.onGround){
-    player.vel.y = 8;
-    player.onGround = false;
-  }
-
-  // Падение в пустоту
   if (player.pos.y < -20){
     player.pos.set(WORLD/2, 16, WORLD/2);
     player.vel.set(0,0,0);
@@ -794,6 +826,7 @@ function updatePlayer(dt){
 
 /* ==================== ЦИКЛ ==================== */
 let last = performance.now();
+let targetTimer = 0;
 
 function animate(){
   requestAnimationFrame(animate);
@@ -805,7 +838,9 @@ function animate(){
     updatePlayer(dt);
     for (const m of mobs) m.update(dt, player.pos);
     updateParticles(dt);
-    updateTargetInfo();
+    // FIX: троттлинг рейкаста для targetInfo
+    targetTimer -= dt;
+    if (targetTimer <= 0){ updateTargetInfo(); targetTimer = 0.1; }
   }
 
   renderer.render(scene, camera);
